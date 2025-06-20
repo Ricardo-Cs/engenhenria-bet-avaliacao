@@ -51,6 +51,7 @@ export function UserManagement() {
   const [isBalanceDialogOpen, setIsBalanceDialogOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   const [editForm, setEditForm] = useState({
     full_name: "",
@@ -62,16 +63,24 @@ export function UserManagement() {
     operation: "add" as "add" | "subtract" | "set",
   })
 
-  const fetchUsers = async () => {
+  const fetchUsers = async (showLoading = true) => {
     try {
-      setLoading(true)
+      if (showLoading) {
+        setLoading(true)
+      } else {
+        setIsRefreshing(true)
+      }
       setError(null)
+
+      console.log("Fetching users...")
 
       const response = await fetch("/api/admin/users", {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
         },
+        // Add cache busting to ensure fresh data
+        cache: "no-cache",
       })
 
       if (!response.ok) {
@@ -80,11 +89,20 @@ export function UserManagement() {
       }
 
       const data = await response.json()
-      setUsers(data.users || [])
+      console.log("Users fetched:", data.users?.length || 0)
+
+      // Sort users by updated_at to show recently updated users first
+      const sortedUsers = (data.users || []).sort(
+        (a: UserType, b: UserType) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+      )
+
+      setUsers(sortedUsers)
     } catch (err: any) {
+      console.error("Error fetching users:", err)
       setError(err.message)
     } finally {
       setLoading(false)
+      setIsRefreshing(false)
     }
   }
 
@@ -113,7 +131,7 @@ export function UserManagement() {
           title: "🔄 Sincronização Concluída!",
           description: `${data.syncedUsers} usuários sincronizados com sucesso!`,
         })
-        await fetchUsers() // Refresh the list
+        await fetchUsers(false) // Refresh without showing loading
       } else {
         toast({
           variant: "default",
@@ -169,7 +187,18 @@ export function UserManagement() {
         throw new Error(errorData.error || "Erro ao atualizar usuário")
       }
 
-      await fetchUsers()
+      const data = await response.json()
+      console.log("User updated:", data.user)
+
+      // Update the user in the local state immediately
+      setUsers((prevUsers) =>
+        prevUsers
+          .map((user) =>
+            user.id === selectedUser.id ? { ...user, ...data.user, updated_at: new Date().toISOString() } : user,
+          )
+          .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
+      )
+
       setIsEditDialogOpen(false)
       setSelectedUser(null)
 
@@ -178,6 +207,9 @@ export function UserManagement() {
         title: "✅ Usuário Atualizado!",
         description: "Informações do usuário foram atualizadas com sucesso!",
       })
+
+      // Refresh data in background to ensure consistency
+      setTimeout(() => fetchUsers(false), 1000)
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -221,7 +253,19 @@ export function UserManagement() {
       }
 
       const data = await response.json()
-      await fetchUsers()
+      console.log("Balance updated:", data)
+
+      // Update the user balance in the local state immediately
+      setUsers((prevUsers) =>
+        prevUsers
+          .map((user) =>
+            user.id === selectedUser.id
+              ? { ...user, balance: data.newBalance, updated_at: new Date().toISOString() }
+              : user,
+          )
+          .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
+      )
+
       setIsBalanceDialogOpen(false)
       setSelectedUser(null)
 
@@ -230,6 +274,9 @@ export function UserManagement() {
         title: "💰 Saldo Atualizado!",
         description: `Saldo alterado de R$ ${data.oldBalance.toFixed(2)} para R$ ${data.newBalance.toFixed(2)}`,
       })
+
+      // Refresh data in background to ensure consistency
+      setTimeout(() => fetchUsers(false), 1000)
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -255,12 +302,17 @@ export function UserManagement() {
         throw new Error(errorData.error || "Erro ao deletar usuário")
       }
 
-      await fetchUsers()
+      // Remove user from local state immediately
+      setUsers((prevUsers) => prevUsers.filter((u) => u.id !== user.id))
+
       toast({
         variant: "success",
         title: "🗑️ Usuário Deletado!",
         description: `Usuário ${user.email} foi removido do sistema.`,
       })
+
+      // Refresh data in background to ensure consistency
+      setTimeout(() => fetchUsers(false), 1000)
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -270,8 +322,15 @@ export function UserManagement() {
     }
   }
 
+  // Auto-refresh every 30 seconds to keep data fresh
   useEffect(() => {
     fetchUsers()
+
+    const interval = setInterval(() => {
+      fetchUsers(false) // Refresh without showing loading spinner
+    }, 30000) // 30 seconds
+
+    return () => clearInterval(interval)
   }, [])
 
   const filteredUsers = users.filter(
@@ -350,21 +409,38 @@ export function UserManagement() {
               className="pl-8 w-64"
             />
           </div>
-          <Button variant="outline" onClick={fetchUsers}>
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Atualizar
+          <Button variant="outline" onClick={() => fetchUsers(false)} disabled={isRefreshing}>
+            <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? "animate-spin" : ""}`} />
+            {isRefreshing ? "Atualizando..." : "Atualizar"}
           </Button>
           <Button variant="outline" onClick={syncUsers} disabled={isSyncing}>
             <Sync className="w-4 h-4 mr-2" />
             {isSyncing ? "Sincronizando..." : "Sincronizar"}
           </Button>
         </div>
+        <div className="text-xs text-gray-500">Última atualização: {new Date().toLocaleTimeString()}</div>
       </div>
 
-      {/* Sync Info */}
+      {/* Auto-refresh Info */}
       <Card className="border-blue-200 bg-blue-50">
         <CardContent className="p-4">
           <div className="flex items-center gap-2 text-blue-800">
+            <RefreshCw className="w-5 h-5" />
+            <div>
+              <p className="font-semibold">Atualização Automática</p>
+              <p className="text-sm">
+                Os dados são atualizados automaticamente a cada 30 segundos. Você também pode clicar em "Atualizar" para
+                forçar uma atualização imediata.
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Sync Info */}
+      <Card className="border-green-200 bg-green-50">
+        <CardContent className="p-4">
+          <div className="flex items-center gap-2 text-green-800">
             <Sync className="w-5 h-5" />
             <div>
               <p className="font-semibold">Sincronização de Usuários</p>
@@ -409,7 +485,7 @@ export function UserManagement() {
                 <TableHead>Email</TableHead>
                 <TableHead>Papel</TableHead>
                 <TableHead>Saldo</TableHead>
-                <TableHead>Cadastro</TableHead>
+                <TableHead>Última Atualização</TableHead>
                 <TableHead>Ações</TableHead>
               </TableRow>
             </TableHeader>
@@ -458,9 +534,22 @@ export function UserManagement() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <span className="font-mono">R$ {user.balance.toFixed(2)}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold">R$ {user.balance.toFixed(2)}</span>
+                        {/* Show if balance was recently updated */}
+                        {new Date(user.updated_at).getTime() > Date.now() - 60000 && (
+                          <Badge variant="outline" className="text-xs text-green-600 border-green-200">
+                            Atualizado
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
-                    <TableCell>{new Date(user.created_at).toLocaleDateString()}</TableCell>
+                    <TableCell>
+                      <div className="text-sm">
+                        <p>{new Date(user.updated_at).toLocaleDateString()}</p>
+                        <p className="text-gray-500">{new Date(user.updated_at).toLocaleTimeString()}</p>
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Button variant="outline" size="sm" onClick={() => handleEditUser(user)}>

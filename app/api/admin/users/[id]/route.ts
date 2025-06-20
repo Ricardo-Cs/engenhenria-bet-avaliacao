@@ -25,7 +25,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       return NextResponse.json({ error: "Invalid role" }, { status: 400 })
     }
 
-    // Update the user
+    // Update the user with explicit timestamp
     const { data: updatedUser, error: updateError } = await supabase
       .from("users")
       .update({
@@ -34,7 +34,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         updated_at: new Date().toISOString(),
       })
       .eq("id", userId)
-      .select()
+      .select("*")
       .single()
 
     if (updateError) {
@@ -42,13 +42,21 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       return NextResponse.json({ error: "Failed to update user", details: updateError.message }, { status: 500 })
     }
 
-    console.log("User updated successfully")
+    console.log("User updated successfully:", updatedUser)
 
-    return NextResponse.json({
+    // Return response with cache control headers
+    const response = NextResponse.json({
       user: updatedUser,
       success: true,
       message: "User updated successfully",
+      timestamp: new Date().toISOString(),
     })
+
+    response.headers.set("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.headers.set("Pragma", "no-cache")
+    response.headers.set("Expires", "0")
+
+    return response
   } catch (error: any) {
     console.error("Unexpected error in PATCH /api/admin/users/[id]:", error)
     return NextResponse.json({ error: "Internal server error", details: error.message }, { status: 500 })
@@ -104,6 +112,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     return NextResponse.json({
       success: true,
       message: "User deleted successfully",
+      timestamp: new Date().toISOString(),
     })
   } catch (error: any) {
     console.error("Unexpected error in DELETE /api/admin/users/[id]:", error)

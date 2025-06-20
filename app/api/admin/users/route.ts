@@ -16,7 +16,8 @@ export async function GET(request: NextRequest) {
 
     console.log("Fetching all users for admin")
 
-    const { data: users, error } = await supabase.from("users").select("*").order("created_at", { ascending: false })
+    // Add timestamp to ensure fresh data
+    const { data: users, error } = await supabase.from("users").select("*").order("updated_at", { ascending: false })
 
     if (error) {
       console.error("Error fetching users:", error)
@@ -31,11 +32,19 @@ export async function GET(request: NextRequest) {
 
     console.log("Users fetched:", users?.length || 0)
 
-    return NextResponse.json({
+    // Add cache control headers to prevent caching
+    const response = NextResponse.json({
       users: users || [],
       count: users?.length || 0,
       status: "success",
+      timestamp: new Date().toISOString(),
     })
+
+    response.headers.set("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.headers.set("Pragma", "no-cache")
+    response.headers.set("Expires", "0")
+
+    return response
   } catch (error: any) {
     console.error("Unexpected error in GET /api/admin/users:", error)
     return NextResponse.json(

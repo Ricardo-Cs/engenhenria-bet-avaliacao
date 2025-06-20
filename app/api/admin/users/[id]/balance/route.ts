@@ -37,7 +37,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     // Get current user balance
     const { data: currentUser, error: fetchError } = await supabase
       .from("users")
-      .select("balance")
+      .select("balance, email, full_name")
       .eq("id", userId)
       .single()
 
@@ -45,6 +45,8 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       console.error("Error fetching user:", fetchError)
       return NextResponse.json({ error: "User not found", details: fetchError?.message }, { status: 404 })
     }
+
+    console.log("Current user balance:", currentUser.balance)
 
     // Calculate new balance
     let newBalance: number
@@ -62,7 +64,9 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         return NextResponse.json({ error: "Invalid operation" }, { status: 400 })
     }
 
-    // Update the user balance
+    console.log("New balance calculated:", newBalance)
+
+    // Update the user balance with explicit timestamp
     const { data: updatedUser, error: updateError } = await supabase
       .from("users")
       .update({
@@ -70,7 +74,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         updated_at: new Date().toISOString(),
       })
       .eq("id", userId)
-      .select()
+      .select("*")
       .single()
 
     if (updateError) {
@@ -79,21 +83,31 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     }
 
     console.log("User balance updated successfully:", {
+      userId,
+      email: currentUser.email,
       oldBalance: currentUser.balance,
-      newBalance,
+      newBalance: updatedUser.balance,
       operation,
       amount: numAmount,
     })
 
-    return NextResponse.json({
+    // Return response with cache control headers
+    const response = NextResponse.json({
       user: updatedUser,
       oldBalance: currentUser.balance,
-      newBalance,
+      newBalance: updatedUser.balance,
       operation,
       amount: numAmount,
       success: true,
       message: "Balance updated successfully",
+      timestamp: new Date().toISOString(),
     })
+
+    response.headers.set("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.headers.set("Pragma", "no-cache")
+    response.headers.set("Expires", "0")
+
+    return response
   } catch (error: any) {
     console.error("Unexpected error in PATCH /api/admin/users/[id]/balance:", error)
     return NextResponse.json({ error: "Internal server error", details: error.message }, { status: 500 })
