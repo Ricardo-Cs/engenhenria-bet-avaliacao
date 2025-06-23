@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient, isSupabaseConfigured } from "@/lib/supabase"
+import { revalidatePath } from "next/cache"
 
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
   console.log("=== PATCH /api/admin/users/[id] START ===")
@@ -70,6 +71,8 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     // Force a refresh of the updated_at timestamp to ensure cache invalidation
     await supabase.from("users").update({ updated_at: new Date().toISOString() }).eq("id", userId)
 
+    revalidatePath('/admin/users');
+
     // Return response with aggressive cache control
     const response = NextResponse.json({
       user: updatedUser,
@@ -139,6 +142,8 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     }
 
     console.log("User deleted successfully")
+
+    revalidatePath('/admin/users');
 
     return NextResponse.json({
       success: true,

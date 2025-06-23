@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createServerClient, isSupabaseConfigured } from "@/lib/supabase"
+import { revalidatePath } from "next/cache"
 
 export async function POST() {
   console.log("=== POST /api/admin/users/sync START ===")
@@ -86,6 +87,8 @@ export async function POST() {
     }
 
     console.log(`Sync completed. ${syncedCount} users synced successfully.`)
+
+    revalidatePath('/admin/users');
 
     return NextResponse.json({
       success: true,
