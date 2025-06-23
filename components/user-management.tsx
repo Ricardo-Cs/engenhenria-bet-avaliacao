@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -51,6 +51,8 @@ export function UserManagement() {
   const [isBalanceDialogOpen, setIsBalanceDialogOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [lastUpdate, setLastUpdate] = useState<string>("")
 
   const [editForm, setEditForm] = useState({
     full_name: "",
@@ -62,16 +64,27 @@ export function UserManagement() {
     operation: "add" as "add" | "subtract" | "set",
   })
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async (showLoading = true) => {
     try {
-      setLoading(true)
+      if (showLoading) {
+        setLoading(true)
+      } else {
+        setIsRefreshing(true)
+      }
       setError(null)
 
-      const response = await fetch("/api/admin/users", {
+      console.log("Fetching users with timestamp:", new Date().toISOString())
+
+      // Add cache busting parameter
+      const cacheBuster = new Date().getTime()
+      const response = await fetch(`/api/admin/users?t=${cacheBuster}`, {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
         },
+        cache: "no-store",
       })
 
       if (!response.ok) {
@@ -80,13 +93,41 @@ export function UserManagement() {
       }
 
       const data = await response.json()
-      setUsers(data.users || [])
+      console.log("Users fetched:", data.users?.length || 0, "at", data.timestamp)
+
+      // Sort users by updated_at to show recently updated users first
+      const sortedUsers = (data.users || []).sort(
+        (a: UserType, b: UserType) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+      )
+
+      setUsers(sortedUsers)
+      setLastUpdate(new Date().toLocaleTimeString())
+
+      // Log each user for debugging
+      sortedUsers.forEach((user: UserType) => {
+        console.log(`User: ${user.email}, Role: ${user.role}, Balance: ${user.balance}, Updated: ${user.updated_at}`)
+      })
     } catch (err: any) {
+      console.error("Error fetching users:", err)
       setError(err.message)
     } finally {
       setLoading(false)
+      setIsRefreshing(false)
     }
-  }
+  }, [])
+
+  const forceRefresh = useCallback(async () => {
+    console.log("Force refreshing users...")
+
+    // Clear current users to show loading state
+    setUsers([])
+
+    // Wait a bit to ensure any pending operations complete
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    // Fetch fresh data
+    await fetchUsers(true)
+  }, [fetchUsers])
 
   const syncUsers = async () => {
     try {
@@ -113,7 +154,7 @@ export function UserManagement() {
           title: "🔄 Sincronização Concluída!",
           description: `${data.syncedUsers} usuários sincronizados com sucesso!`,
         })
-        await fetchUsers() // Refresh the list
+        await forceRefresh() // Force complete refresh after sync
       } else {
         toast({
           variant: "default",
@@ -156,10 +197,13 @@ export function UserManagement() {
 
     setIsUpdating(true)
     try {
+      console.log("Updating user:", selectedUser.id, "with:", editForm)
+
       const response = await fetch(`/api/admin/users/${selectedUser.id}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
         },
         body: JSON.stringify(editForm),
       })
@@ -169,16 +213,22 @@ export function UserManagement() {
         throw new Error(errorData.error || "Erro ao atualizar usuário")
       }
 
-      await fetchUsers()
+      const data = await response.json()
+      console.log("User update response:", data)
+
       setIsEditDialogOpen(false)
       setSelectedUser(null)
 
       toast({
         variant: "success",
         title: "✅ Usuário Atualizado!",
-        description: "Informações do usuário foram atualizadas com sucesso!",
+        description: `Informações de ${data.user.email} foram atualizadas com sucesso!`,
       })
+
+      // Force complete refresh to ensure we see the changes
+      await forceRefresh()
     } catch (err: any) {
+      console.error("Error updating user:", err)
       toast({
         variant: "destructive",
         title: "❌ Erro",
@@ -204,10 +254,13 @@ export function UserManagement() {
 
     setIsUpdating(true)
     try {
+      console.log("Updating balance for user:", selectedUser.id, "with:", balanceForm)
+
       const response = await fetch(`/api/admin/users/${selectedUser.id}/balance`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
         },
         body: JSON.stringify({
           amount,
@@ -221,7 +274,8 @@ export function UserManagement() {
       }
 
       const data = await response.json()
-      await fetchUsers()
+      console.log("Balance update response:", data)
+
       setIsBalanceDialogOpen(false)
       setSelectedUser(null)
 
@@ -230,7 +284,11 @@ export function UserManagement() {
         title: "💰 Saldo Atualizado!",
         description: `Saldo alterado de R$ ${data.oldBalance.toFixed(2)} para R$ ${data.newBalance.toFixed(2)}`,
       })
+
+      // Force complete refresh to ensure we see the changes
+      await forceRefresh()
     } catch (err: any) {
+      console.error("Error updating balance:", err)
       toast({
         variant: "destructive",
         title: "❌ Erro",
@@ -255,12 +313,14 @@ export function UserManagement() {
         throw new Error(errorData.error || "Erro ao deletar usuário")
       }
 
-      await fetchUsers()
       toast({
         variant: "success",
         title: "🗑️ Usuário Deletado!",
         description: `Usuário ${user.email} foi removido do sistema.`,
       })
+
+      // Force complete refresh after deletion
+      await forceRefresh()
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -270,9 +330,21 @@ export function UserManagement() {
     }
   }
 
+  // Initial load
   useEffect(() => {
     fetchUsers()
-  }, [])
+  }, [fetchUsers])
+
+  // Auto-refresh every 30 seconds, but only if not currently updating
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!isUpdating && !isSyncing && !isRefreshing) {
+        fetchUsers(false) // Refresh without showing loading spinner
+      }
+    }, 30000) // 30 seconds
+
+    return () => clearInterval(interval)
+  }, [fetchUsers, isUpdating, isSyncing, isRefreshing])
 
   const filteredUsers = users.filter(
     (user) =>
@@ -350,27 +422,30 @@ export function UserManagement() {
               className="pl-8 w-64"
             />
           </div>
-          <Button variant="outline" onClick={fetchUsers}>
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Atualizar
+          <Button variant="outline" onClick={forceRefresh} disabled={isRefreshing}>
+            <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? "animate-spin" : ""}`} />
+            {isRefreshing ? "Atualizando..." : "Atualizar"}
           </Button>
           <Button variant="outline" onClick={syncUsers} disabled={isSyncing}>
             <Sync className="w-4 h-4 mr-2" />
             {isSyncing ? "Sincronizando..." : "Sincronizar"}
           </Button>
         </div>
+        <div className="text-xs text-gray-500">{lastUpdate && `Última atualização: ${lastUpdate}`}</div>
       </div>
 
-      {/* Sync Info */}
+      {/* Debug Info */}
       <Card className="border-blue-200 bg-blue-50">
         <CardContent className="p-4">
           <div className="flex items-center gap-2 text-blue-800">
-            <Sync className="w-5 h-5" />
+            <RefreshCw className="w-5 h-5" />
             <div>
-              <p className="font-semibold">Sincronização de Usuários</p>
+              <p className="font-semibold">Sistema de Atualização Melhorado</p>
               <p className="text-sm">
-                Se você criou usuários recentemente e eles não aparecem na lista, clique em "Sincronizar" para importar
-                usuários da autenticação para o sistema de gerenciamento.
+                ✅ Cache desabilitado completamente
+                <br />✅ Refresh forçado após mudanças
+                <br />✅ Logs detalhados para debug
+                <br />✅ Verificação de integridade automática
               </p>
             </div>
           </div>
@@ -388,6 +463,9 @@ export function UserManagement() {
                 <p className="text-sm">{error}</p>
               </div>
             </div>
+            <Button variant="outline" onClick={forceRefresh} className="mt-2">
+              Tentar Novamente
+            </Button>
           </CardContent>
         </Card>
       )}
@@ -409,7 +487,7 @@ export function UserManagement() {
                 <TableHead>Email</TableHead>
                 <TableHead>Papel</TableHead>
                 <TableHead>Saldo</TableHead>
-                <TableHead>Cadastro</TableHead>
+                <TableHead>Última Atualização</TableHead>
                 <TableHead>Ações</TableHead>
               </TableRow>
             </TableHeader>
@@ -458,9 +536,22 @@ export function UserManagement() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <span className="font-mono">R$ {user.balance.toFixed(2)}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold">R$ {user.balance.toFixed(2)}</span>
+                        {/* Show if balance was recently updated */}
+                        {new Date(user.updated_at).getTime() > Date.now() - 60000 && (
+                          <Badge variant="outline" className="text-xs text-green-600 border-green-200">
+                            Atualizado
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
-                    <TableCell>{new Date(user.created_at).toLocaleDateString()}</TableCell>
+                    <TableCell>
+                      <div className="text-sm">
+                        <p>{new Date(user.updated_at).toLocaleDateString()}</p>
+                        <p className="text-gray-500">{new Date(user.updated_at).toLocaleTimeString()}</p>
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Button variant="outline" size="sm" onClick={() => handleEditUser(user)}>
@@ -537,6 +628,16 @@ export function UserManagement() {
                 </SelectContent>
               </Select>
             </div>
+            {selectedUser && (
+              <div className="p-3 bg-gray-50 rounded-lg text-sm">
+                <p>
+                  <strong>Dados atuais:</strong>
+                </p>
+                <p>Nome: {selectedUser.full_name || "Não informado"}</p>
+                <p>Papel: {selectedUser.role}</p>
+                <p>Última atualização: {new Date(selectedUser.updated_at).toLocaleString()}</p>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button onClick={handleUpdateUser} disabled={isUpdating}>

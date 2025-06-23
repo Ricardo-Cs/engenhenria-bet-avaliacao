@@ -15,11 +15,14 @@ export function useAuth() {
 
   const fetchUserProfile = useCallback(async (userId: string) => {
     try {
+      console.log("Fetching user profile for:", userId)
+
       const response = await fetch(`/api/users/${userId}`, {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
         },
+        cache: "no-cache", // Ensure fresh data
       })
 
       if (!response.ok) {
@@ -27,14 +30,52 @@ export function useAuth() {
       }
 
       const data = await response.json()
+      console.log("User profile fetched:", data.user)
+
       if (data.user) {
         setUserProfile(data.user)
+      } else {
+        console.warn("No user profile found, creating one...")
+        // Try to create user profile if it doesn't exist
+        await createUserProfile(userId)
       }
     } catch (error) {
       console.error("Error fetching user profile:", error)
       setError("Failed to fetch user profile")
     }
   }, [])
+
+  const createUserProfile = async (userId: string) => {
+    try {
+      if (!supabase) return
+
+      const { data: authUser } = await supabase.auth.getUser()
+      if (!authUser.user) return
+
+      console.log("Creating user profile for:", userId)
+
+      const { data: newUser, error } = await supabase
+        .from("users")
+        .insert({
+          id: userId,
+          email: authUser.user.email || "",
+          full_name: authUser.user.user_metadata?.full_name || authUser.user.user_metadata?.name || null,
+          role: "user",
+          balance: 1000.0,
+        })
+        .select()
+        .single()
+
+      if (error) {
+        console.error("Error creating user profile:", error)
+      } else {
+        console.log("User profile created:", newUser)
+        setUserProfile(newUser)
+      }
+    } catch (error) {
+      console.error("Error in createUserProfile:", error)
+    }
+  }
 
   useEffect(() => {
     if (!supabase) {
@@ -80,6 +121,8 @@ export function useAuth() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log("Auth state changed:", event, session?.user?.email)
+
       if (mounted) {
         setUser(session?.user ?? null)
         if (session?.user) {
@@ -107,6 +150,11 @@ export function useAuth() {
         email,
         password,
       })
+
+      if (data.user && !error) {
+        console.log("Sign in successful:", data.user.email)
+      }
+
       return { data, error }
     } catch (error) {
       console.error("Sign in error:", error)
@@ -129,6 +177,11 @@ export function useAuth() {
           },
         },
       })
+
+      if (data.user && !error) {
+        console.log("Sign up successful:", data.user.email)
+      }
+
       return { data, error }
     } catch (error) {
       console.error("Sign up error:", error)

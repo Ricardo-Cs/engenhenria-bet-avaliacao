@@ -18,23 +18,37 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     const { full_name, role } = body
     const userId = params.id
 
-    console.log("Updating user:", userId, body)
+    console.log("Updating user:", userId, "with data:", body)
 
     // Validate role
     if (role && !["user", "admin"].includes(role)) {
       return NextResponse.json({ error: "Invalid role" }, { status: 400 })
     }
 
-    // Update the user
+    // Get current user data first
+    const { data: currentUser, error: fetchError } = await supabase.from("users").select("*").eq("id", userId).single()
+
+    if (fetchError || !currentUser) {
+      console.error("Error fetching current user:", fetchError)
+      return NextResponse.json({ error: "User not found", details: fetchError?.message }, { status: 404 })
+    }
+
+    console.log("Current user data:", currentUser)
+
+    // Update the user with explicit timestamp and ensure the update happens
+    const updateData = {
+      ...(full_name !== undefined && { full_name }),
+      ...(role !== undefined && { role }),
+      updated_at: new Date().toISOString(),
+    }
+
+    console.log("Update data:", updateData)
+
     const { data: updatedUser, error: updateError } = await supabase
       .from("users")
-      .update({
-        full_name,
-        role,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updateData)
       .eq("id", userId)
-      .select()
+      .select("*")
       .single()
 
     if (updateError) {
@@ -42,13 +56,38 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       return NextResponse.json({ error: "Failed to update user", details: updateError.message }, { status: 500 })
     }
 
-    console.log("User updated successfully")
+    console.log("User updated successfully:", updatedUser)
 
-    return NextResponse.json({
+    // Verify the update actually happened
+    const { data: verifyUser, error: verifyError } = await supabase.from("users").select("*").eq("id", userId).single()
+
+    if (verifyError) {
+      console.error("Error verifying update:", verifyError)
+    } else {
+      console.log("Verified updated user:", verifyUser)
+    }
+
+    // Force a refresh of the updated_at timestamp to ensure cache invalidation
+    await supabase.from("users").update({ updated_at: new Date().toISOString() }).eq("id", userId)
+
+    // Return response with aggressive cache control
+    const response = NextResponse.json({
       user: updatedUser,
       success: true,
       message: "User updated successfully",
+      timestamp: new Date().toISOString(),
+      changes: {
+        full_name: { from: currentUser.full_name, to: updatedUser.full_name },
+        role: { from: currentUser.role, to: updatedUser.role },
+      },
     })
+
+    response.headers.set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+    response.headers.set("Pragma", "no-cache")
+    response.headers.set("Expires", "0")
+    response.headers.set("Last-Modified", new Date().toUTCString())
+
+    return response
   } catch (error: any) {
     console.error("Unexpected error in PATCH /api/admin/users/[id]:", error)
     return NextResponse.json({ error: "Internal server error", details: error.message }, { status: 500 })
@@ -104,6 +143,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     return NextResponse.json({
       success: true,
       message: "User deleted successfully",
+      timestamp: new Date().toISOString(),
     })
   } catch (error: any) {
     console.error("Unexpected error in DELETE /api/admin/users/[id]:", error)

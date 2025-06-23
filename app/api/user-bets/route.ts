@@ -32,11 +32,13 @@ export async function GET(request: NextRequest) {
           title,
           description,
           category,
-          status
+          status,
+          end_date
         ),
         bet_options (
           id,
-          name
+          name,
+          odds
         )
       `)
       .eq("user_id", userId)
@@ -55,11 +57,19 @@ export async function GET(request: NextRequest) {
 
     console.log("User bets fetched:", userBets?.length || 0)
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       userBets: userBets || [],
       count: userBets?.length || 0,
       status: "success",
+      timestamp: new Date().toISOString(),
     })
+
+    // Add cache control headers
+    response.headers.set("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.headers.set("Pragma", "no-cache")
+    response.headers.set("Expires", "0")
+
+    return response
   } catch (error: any) {
     console.error("Unexpected error in GET /api/user-bets:", error)
     return NextResponse.json(
@@ -103,8 +113,38 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid bet amount" }, { status: 400 })
     }
 
+    // Check if bet exists and is active
+    const { data: bet, error: betError } = await supabase
+      .from("bets")
+      .select("id, status, title")
+      .eq("id", betId)
+      .eq("status", "active")
+      .single()
+
+    if (betError || !bet) {
+      console.error("Bet not found or not active:", betError)
+      return NextResponse.json({ error: "Bet not found or not active" }, { status: 404 })
+    }
+
+    // Check if bet option exists
+    const { data: betOption, error: optionError } = await supabase
+      .from("bet_options")
+      .select("id, name, odds")
+      .eq("id", betOptionId)
+      .eq("bet_id", betId)
+      .single()
+
+    if (optionError || !betOption) {
+      console.error("Bet option not found:", optionError)
+      return NextResponse.json({ error: "Bet option not found" }, { status: 404 })
+    }
+
     // Check user balance
-    const { data: user, error: userError } = await supabase.from("users").select("balance").eq("id", userId).single()
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("balance, role")
+      .eq("id", userId)
+      .single()
 
     if (userError) {
       console.error("Error fetching user:", userError)
@@ -121,6 +161,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 })
     }
 
+    // Check if user is admin (admins cannot bet)
+    if (user.role === "admin") {
+      return NextResponse.json(
+        {
+          error: "Administrators cannot place bets to avoid conflicts of interest",
+        },
+        { status: 403 },
+      )
+    }
+
     if (user.balance < betAmount) {
       return NextResponse.json({ error: "Insufficient balance" }, { status: 400 })
     }
@@ -128,8 +178,18 @@ export async function POST(request: NextRequest) {
     // Calculate potential payout
     const potentialPayout = betAmount * Number(odds)
 
+    console.log("Placing bet:", {
+      userId,
+      betId,
+      betOptionId,
+      amount: betAmount,
+      odds: Number(odds),
+      potentialPayout,
+      userBalance: user.balance,
+    })
+
     // Start transaction - place bet
-    const { data: userBet, error: betError } = await supabase
+    const { data: userBet, error: betPlaceError } = await supabase
       .from("user_bets")
       .insert({
         user_id: userId,
@@ -155,12 +215,12 @@ export async function POST(request: NextRequest) {
       `)
       .single()
 
-    if (betError) {
-      console.error("Error placing bet:", betError)
+    if (betPlaceError) {
+      console.error("Error placing bet:", betPlaceError)
       return NextResponse.json(
         {
           error: "Failed to place bet",
-          details: betError.message,
+          details: betPlaceError.message,
         },
         { status: 500 },
       )
@@ -169,7 +229,10 @@ export async function POST(request: NextRequest) {
     // Update user balance
     const { error: balanceError } = await supabase
       .from("users")
-      .update({ balance: user.balance - betAmount })
+      .update({
+        balance: user.balance - betAmount,
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", userId)
 
     if (balanceError) {
@@ -188,11 +251,19 @@ export async function POST(request: NextRequest) {
 
     console.log("Bet placed successfully:", userBet.id)
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       userBet,
       success: true,
       message: "Bet placed successfully",
+      newBalance: user.balance - betAmount,
     })
+
+    // Add cache control headers
+    response.headers.set("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.headers.set("Pragma", "no-cache")
+    response.headers.set("Expires", "0")
+
+    return response
   } catch (error: any) {
     console.error("Unexpected error in POST /api/user-bets:", error)
     return NextResponse.json(
