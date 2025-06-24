@@ -134,7 +134,7 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 {isAdmin ? <Shield className="w-5 h-5 text-red-600" /> : <Users className="w-5 h-5 text-blue-600" />}
                 <h1 className="text-xl font-bold text-gray-900">
-                  {isAdmin ? "Painel Administrativo" : "Sistema de Apostas"}
+                  {isAdmin ? "Painel Administrativo" : "Bet Fácil"}
                 </h1>
               </div>
               {isAdmin && (
